@@ -1,0 +1,53 @@
+[project]
+name = "arxiv-finder"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "David Liu", email = "daohongliu42@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.141.1",
+    "feedparser>=6.0.14",
+    "httpx>=0.28.1",
+    "pydantic>=2.13.4",
+    "pymupdf>=1.28.2",
+    "python-dotenv>=1.2.3",
+    "python-multipart>=0.0.32",
+    "pyyaml>=6.0.3",
+    "typer>=0.27.1",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[project.scripts]
+arxiv-finder = "arxiv_finder:main"
+
+[build-system]
+requires = ["uv_build>=0.11.31,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "ruff>=0.16.3",
+    "types-pyyaml>=6.0.12.20260815",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "B008",    # typer.Option(...) in function defaults is idiomatic
+    "RUF059",  # intentional unpacking for clarity
+]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
