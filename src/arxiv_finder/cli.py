@@ -184,6 +184,72 @@ def eval(
         typer.echo(f"full report written to {out}")
 
 
+@app.command(name="pdf-cache")
+def pdf_cache_cmd(
+    missing: bool = typer.Option(
+        False, help="print 'arxiv_id<TAB>pdf_url' for papers whose PDF is not cached"
+    ),
+    download: Path | None = typer.Option(
+        None, help="download PDFs listed in FILE (lines: arxiv_id<TAB>pdf_url) into the cache"
+    ),
+    concurrency: int = typer.Option(4, help="parallel downloads for --download"),
+) -> None:
+    """Inspect/fill the PDF cache (for moving downloads to a machine with arXiv access)."""
+    from . import pdf
+
+    if download is not None:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        entries: list[tuple[str, str]] = []
+        for line in download.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) != 2:
+                continue
+            entries.append((parts[0], parts[1]))
+        todo = [(aid, url) for aid, url in entries if not pdf.pdf_path(aid).exists()]
+        typer.echo(f"{len(entries)} listed, {len(todo)} missing locally")
+        done = 0
+        failed: list[str] = []
+
+        def fetch_one(aid: str, url: str) -> str:
+            try:
+                pdf.ensure_pdf(aid, url)
+                return ""
+            except Exception as exc:
+                return f"{aid}: {exc}"
+
+        with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
+            futures = {pool.submit(fetch_one, aid, url): aid for aid, url in todo}
+            for fut in as_completed(futures):
+                done += 1
+                err = fut.result()
+                if err:
+                    failed.append(err)
+                if done % 25 == 0 or done == len(todo):
+                    typer.echo(f"  {done}/{len(todo)} downloaded")
+        if failed:
+            typer.echo(f"{len(failed)} failed:")
+            for line in failed[:20]:
+                typer.echo(f"  {line}")
+        return
+
+    if missing:
+        conn = _get_conn()
+        rows = conn.execute("SELECT arxiv_id, pdf_url FROM papers ORDER BY submitted").fetchall()
+        n = 0
+        for r in rows:
+            if not pdf.pdf_path(r["arxiv_id"]).exists():
+                typer.echo(f"{r['arxiv_id']}\t{r['pdf_url']}")
+                n += 1
+        typer.echo(f"# {n} missing", err=True)
+        return
+
+    typer.echo("nothing to do: use --missing or --download FILE")
+
+
 @app.command()
 def stats() -> None:
     """Print funnel statistics."""
