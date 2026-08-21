@@ -86,7 +86,7 @@ def test_export_target_rows(conn):
     assert r[5] == "Tsinghua University"
     assert r[6] == "Peking University"
     assert r[7] == "MIT"
-    assert r[8:13] == ["C Three", "D Four", "E Five", "F Six", "G Seven"]
+    assert r[8:13] == ["G Seven", "F Six", "E Five", "D Four", "C Three"]
     assert rows[2][3] == "Survey or Position Paper"
 
 

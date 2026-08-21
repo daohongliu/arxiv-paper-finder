@@ -210,8 +210,28 @@ ALL_UNCLEAR_JSON = json.dumps(
     }
 )
 
+LIKELY_YES_JSON = json.dumps(
+    {
+        "likely_mainland_china": "yes",
+        "authors": [
+            {"name": "A One", "institution": "", "country": "unclear", "mainland_china": "unclear"},
+            {"name": "B Two", "institution": "", "country": "unclear", "mainland_china": "unclear"},
+        ],
+    }
+)
 
-def test_run_affiliations_all_unclear_goes_to_review(conn, tmp_path, pdf_bytes, monkeypatch):
+LIKELY_NO_JSON = json.dumps(
+    {
+        "likely_mainland_china": "no",
+        "authors": [
+            {"name": "John Smith", "institution": "MIT", "country": "USA", "mainland_china": "no"},
+            {"name": "Anna Novak", "institution": "Oxford", "country": "UK", "mainland_china": "no"},
+        ],
+    }
+)
+
+
+def test_run_affiliations_all_unclear_keeps_for_recall(conn, tmp_path, pdf_bytes, monkeypatch):
     monkeypatch.setenv("ARXIV_FINDER_DATA", str(tmp_path))
     db.seed_prompt(conn, "affiliations", "extract {{paper_text}} {{author_names}}")
     pid, text = db.get_prompt(conn, "affiliations")
@@ -228,5 +248,51 @@ def test_run_affiliations_all_unclear_goes_to_review(conn, tmp_path, pdf_bytes, 
                                     download_fn=fake_download)
     assert stats["ok"] == 1
     row = conn.execute("SELECT status, china_flag FROM papers").fetchone()
-    assert row["status"] == "needs_review"
+    assert row["status"] == "affiliated"
+    assert row["china_flag"] == 1
+
+
+def test_run_affiliations_likely_mainland_promotes(conn, tmp_path, pdf_bytes, monkeypatch):
+    monkeypatch.setenv("ARXIV_FINDER_DATA", str(tmp_path))
+    db.seed_prompt(conn, "affiliations", "extract {{paper_text}} {{author_names}}")
+    pid, text = db.get_prompt(conn, "affiliations")
+    cfg = AppConfig()
+    _insert_papers(conn, 1)
+
+    def fake_download(arxiv_id: str, url: str) -> Path:
+        p = tmp_path / f"{arxiv_id}.pdf"
+        p.write_bytes(pdf_bytes)
+        return p
+
+    stub = StubLLM([LIKELY_YES_JSON])
+    stats = stages.run_affiliations(conn, cfg, pid, text, client=stub,
+                                    download_fn=fake_download)
+    assert stats["ok"] == 1
+    row = conn.execute("SELECT status, china_flag FROM papers").fetchone()
+    assert row["status"] == "affiliated"
+    assert row["china_flag"] == 1
+    aff = conn.execute("SELECT likely_mainland_china FROM affiliations").fetchone()
+    assert aff["likely_mainland_china"] == "yes"
+
+
+def test_run_affiliations_likely_no_excludes(conn, tmp_path, pdf_bytes, monkeypatch):
+    monkeypatch.setenv("ARXIV_FINDER_DATA", str(tmp_path))
+    db.seed_prompt(conn, "affiliations", "extract {{paper_text}} {{author_names}}")
+    pid, text = db.get_prompt(conn, "affiliations")
+    cfg = AppConfig()
+    _insert_papers(conn, 1)
+
+    def fake_download(arxiv_id: str, url: str) -> Path:
+        p = tmp_path / f"{arxiv_id}.pdf"
+        p.write_bytes(pdf_bytes)
+        return p
+
+    stub = StubLLM([LIKELY_NO_JSON])
+    stats = stages.run_affiliations(conn, cfg, pid, text, client=stub,
+                                    download_fn=fake_download)
+    assert stats["ok"] == 1
+    row = conn.execute("SELECT status, china_flag FROM papers").fetchone()
+    assert row["status"] == "filtered_out"
     assert row["china_flag"] == 0
+    aff = conn.execute("SELECT likely_mainland_china FROM affiliations").fetchone()
+    assert aff["likely_mainland_china"] == "no"

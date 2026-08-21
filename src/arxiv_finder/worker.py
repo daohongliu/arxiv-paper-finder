@@ -20,6 +20,9 @@ class _Halted(Exception):
 def run_worker(poll_sec: float = 2.0, once: bool = False) -> None:
     conn = db.connect()
     db.init_db(conn)
+    requeued = jobs.requeue_stale_running(conn)
+    if requeued:
+        print(f"requeued {requeued} job(s) left 'running' by a previous worker")
     while True:
         row = jobs.claim_next_job(conn)
         if row is None:

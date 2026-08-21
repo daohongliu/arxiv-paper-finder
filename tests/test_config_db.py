@@ -41,7 +41,7 @@ def test_seed_and_current_config(conn):
     db.seed_config(conn, cfg.model_dump_json())
     version_id, raw = db.current_config(conn)
     assert version_id == 1
-    assert raw["search"]["page_size"] == 200
+    assert raw["search"]["page_size"] == 250
     with pytest.raises(RuntimeError):
         db.seed_config(conn, cfg.model_dump_json())
 
@@ -70,6 +70,27 @@ PAPER = {
     "pdf_url": "https://arxiv.org/pdf/2504.00001v1",
     "queries": ["safety_phrases"],
 }
+
+
+def test_init_db_migrates_likely_mainland_column(tmp_path):
+    c = db.connect(tmp_path / "legacy.db")
+    c.executescript(
+        """CREATE TABLE affiliations (
+             id INTEGER PRIMARY KEY,
+             paper_id INTEGER NOT NULL UNIQUE,
+             prompt_version_id INTEGER,
+             model TEXT NOT NULL,
+             method TEXT NOT NULL,
+             status TEXT NOT NULL,
+             authors_json TEXT NOT NULL,
+             error TEXT,
+             created_at TEXT NOT NULL
+           );"""
+    )
+    c.commit()
+    db.init_db(c)
+    cols = {r["name"] for r in c.execute("PRAGMA table_info(affiliations)")}
+    assert "likely_mainland_china" in cols
 
 
 def test_store_papers_insert_and_merge(conn):

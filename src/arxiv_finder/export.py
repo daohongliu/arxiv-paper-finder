@@ -135,7 +135,10 @@ def export_dataset_target(
         authors: list[str] = json.loads(r["authors_json"])
         aff: list[dict] = json.loads(r["aff_json"]) if r["aff_json"] else []
         insts = institutions_in_order(aff)
-        anchors = authors[-5:]
+        # Anchor authors = the paper's senior/corresponding authors, listed
+        # most-senior first (in Chinese papers the corresponding author is last,
+        # so reverse the tail). Matches the ground-truth "Anchor author" columns.
+        anchors = list(reversed(authors[-5:]))
         row = [
             "",
             r["title"],

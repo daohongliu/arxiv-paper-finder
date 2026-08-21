@@ -292,6 +292,13 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
 
     from .web.app import create_app
 
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        typer.echo(
+            f"WARNING: serving on non-loopback host {host!r} exposes the API "
+            "(job control, data deletion, paid LLM spend) with no authentication. "
+            "Prefer a localhost host or add an auth layer.",
+            err=True,
+        )
     uvicorn.run(create_app(), host=host, port=port)
 
 

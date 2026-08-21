@@ -29,6 +29,13 @@ class LLMClient:
         self.api_key = api_key
         self.timeout_sec = timeout_sec
         self.max_retries = max_retries
+        # One pooled client shared across all threads (httpx.Client is thread-safe).
+        # Creating a client per call forced a fresh TCP+TLS handshake on every LLM
+        # request, which throttled throughput at high concurrency.
+        self._client = httpx.Client(timeout=timeout_sec)
+
+    def close(self) -> None:
+        self._client.close()
 
     def complete(
         self,
@@ -54,8 +61,7 @@ class LLMClient:
         start = time.monotonic()
         for attempt in range(self.max_retries + 1):
             try:
-                with httpx.Client(timeout=self.timeout_sec) as client:
-                    resp = client.post(url, json=payload, headers=headers)
+                resp = self._client.post(url, json=payload, headers=headers)
                 if resp.status_code == 429 or resp.status_code >= 500:
                     raise LLMError(f"HTTP {resp.status_code}: {resp.text[:300]}")
                 resp.raise_for_status()
@@ -82,8 +88,7 @@ class LLMClient:
         url = f"{self.base_url}/models"
         headers = {"Authorization": f"Bearer {self.api_key}"}
         try:
-            with httpx.Client(timeout=30.0) as client:
-                resp = client.get(url, headers=headers)
+            resp = self._client.get(url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
         except (httpx.HTTPError, ValueError) as exc:

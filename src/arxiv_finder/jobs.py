@@ -154,6 +154,15 @@ def resume_job(conn: sqlite3.Connection, job_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def requeue_stale_running(conn: sqlite3.Connection) -> int:
+    """Requeue jobs left 'running' by a crashed worker (single-worker tool)."""
+    cur = conn.execute(
+        "UPDATE jobs SET status = 'queued', started_at = NULL WHERE status = 'running'"
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def halt_status(conn: sqlite3.Connection, job_id: int) -> str | None:
     row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
     if row is None:

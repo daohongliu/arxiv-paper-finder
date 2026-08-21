@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 CATEGORIES = ("alignment", "robustness", "monitoring", "systemic_safety")
 SUBCATEGORIES = ("evaluations", "interpretability", "other")
@@ -53,10 +53,3 @@ def decide(
     if result.is_frontier_ai_safety:
         return ("screened_included", "included")
     return ("screened_excluded", "excluded")
-
-
-def validate_or_raise(raw: dict[str, Any]) -> ScreenResult:
-    try:
-        return parse_screen_result(raw)
-    except ValidationError as exc:
-        raise ValueError(f"invalid screen result: {exc}") from exc

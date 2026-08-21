@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS affiliations (
   method TEXT NOT NULL,
   status TEXT NOT NULL,
   authors_json TEXT NOT NULL,
+  likely_mainland_china TEXT,
   error TEXT,
   created_at TEXT NOT NULL
 );
@@ -139,7 +140,15 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Idempotent migrations for databases created before a column was added."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(affiliations)")}
+    if "likely_mainland_china" not in cols:
+        conn.execute("ALTER TABLE affiliations ADD COLUMN likely_mainland_china TEXT")
 
 
 def seed_config(conn: sqlite3.Connection, config_json: str, note: str = "seed") -> int:

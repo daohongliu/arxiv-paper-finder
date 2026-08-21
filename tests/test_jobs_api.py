@@ -37,7 +37,7 @@ def test_job_snapshot(conn):
     job_id = jobs.enqueue_job(conn, "screen", {})
     row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     config, prompts = jobs.job_snapshot(conn, row)
-    assert config["search"]["page_size"] == 200
+    assert config["search"]["page_size"] == 250
     assert prompts["screen"][1] == "screen prompt"
 
 
@@ -61,7 +61,7 @@ def test_api_flow(conn, tmp_path, monkeypatch):
 
     r = client.get("/api/config")
     assert r.status_code == 200
-    assert r.json()["config"]["search"]["page_size"] == 200
+    assert r.json()["config"]["search"]["page_size"] == 250
 
     cfg = r.json()["config"]
     cfg["china_filter"]["min_count"] = 2
@@ -149,6 +149,7 @@ def test_api_flow(conn, tmp_path, monkeypatch):
 def test_api_gt_import(conn, tmp_path, monkeypatch):
     _seed(conn)
     monkeypatch.setenv("ARXIV_FINDER_DB", str(tmp_path / "test.db"))
+    monkeypatch.setenv("ARXIV_FINDER_DATA", str(tmp_path / "data"))
     conn.execute(
         """INSERT INTO papers (arxiv_id, title, abstract, authors_json, categories_json,
            submitted, updated, abs_url, pdf_url, queries_json, status, category)

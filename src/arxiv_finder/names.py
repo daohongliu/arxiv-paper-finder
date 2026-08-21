@@ -45,6 +45,7 @@ ong lim goh chua yeo koh teo chai sim loo foo yap loh low fong pang pua quek
 tay teng teoh tiong yeoh yeow yong seow siah soh wee wun hng koo cheong chee
 choo thio kwek leong mok gan heng leo liaw loke lye mah oo ong poh see thng
 too ung woo yam yow yun gim phee qua poo kow
+lyu lui chau chern hei ba baa hooi
 """.split()
 
 _COMPOUND = """

@@ -42,6 +42,27 @@ def test_load_ground_truth_csv(tmp_path):
     assert gt[1]["subcategory"] == "interpretability"
 
 
+def test_load_ground_truth_papers_clean_format(tmp_path):
+    """The real ground-truth CSV (papers_clean.csv) uses 'Title URL' for the arXiv id
+    and 'Research direction' for the category."""
+    p = tmp_path / "papers_clean.csv"
+    with p.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["Reviewed", "Title", "Title URL", "Research direction", "Date",
+                    "Institution 1", "Institution 2", "Other institutions",
+                    "Anchor author 1", "Anchor author 2", "Anchor author 3",
+                    "Anchor author 4", "Anchor author 5"])
+        w.writerow(["", "Safety Assessment of Chinese LLMs",
+                    "https://arxiv.org/abs/2304.10436", "Monitoring (evaluations)",
+                    "2023-04-20 00:00:00", "Tsinghua University", "", "",
+                    "Minlie Huang", "Jiale Cheng", "", "", ""])
+    gt = evalgt.load_ground_truth(p)
+    assert len(gt) == 1
+    assert gt[0]["arxiv_id"] == "2304.10436"
+    assert gt[0]["category"] == "monitoring"
+    assert gt[0]["subcategory"] == "evaluations"
+
+
 def test_evaluate_funnel(conn):
     db.seed_config(conn, "{}")
     conn.execute(

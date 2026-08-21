@@ -9,8 +9,19 @@ from typing import Any
 
 from .fetch import parse_arxiv_id
 
-_ID_HEADERS = ("arxiv_id", "arxivid", "arxiv id", "id", "paper_id", "paper id", "paper")
-_CAT_HEADERS = ("category", "direction", "label", "class", "type")
+_ID_HEADERS = (
+    "arxiv_id",
+    "arxivid",
+    "arxiv id",
+    "id",
+    "paper_id",
+    "paper id",
+    "paper",
+    "title url",
+    "url",
+    "link",
+)
+_CAT_HEADERS = ("category", "direction", "label", "class", "type", "research direction")
 
 
 def normalize_id(raw: str) -> str | None:

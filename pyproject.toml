@@ -1,7 +1,7 @@
 [project]
 name = "arxiv-finder"
 version = "0.1.0"
-description = "Add your description here"
+description = "Automated arXiv pipeline to build a dataset of frontier AI-safety papers with Chinese-institution contributions"
 readme = "README.md"
 authors = [
     { name = "David Liu", email = "daohongliu42@gmail.com" }

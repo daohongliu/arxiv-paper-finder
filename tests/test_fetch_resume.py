@@ -20,7 +20,8 @@ def _cfg_two_clauses() -> SearchConfig:
 def test_fetch_papers_start_unit_skips(monkeypatch):
     calls: list[str] = []
 
-    def fake_slice(client, base_url, query, page_size, throttle, max_retries=8):
+    def fake_slice(client, base_url, query, page_size, throttle, max_retries=8,
+                   max_results=None):
         calls.append(query)
         return ([], 0)
 
@@ -52,7 +53,8 @@ def test_fetch_resumes_after_rate_limit_failure(tmp_path, monkeypatch):
 
     state = {"fail_on_call": 3, "calls": 0}
 
-    def fake_slice(client, base_url, query, page_size, throttle, max_retries=8):
+    def fake_slice(client, base_url, query, page_size, throttle, max_retries=8,
+                   max_results=None):
         state["calls"] += 1
         if state["calls"] == state["fail_on_call"]:
             raise httpx.HTTPError("simulated rate-limit death")

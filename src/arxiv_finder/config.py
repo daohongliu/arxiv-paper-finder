@@ -194,8 +194,8 @@ class SearchConfig(BaseModel):
             SearchClause(name="task_transferability", query='all:"task transferability"'),
         ]
     )
-    page_size: int = 200
-    min_interval_sec: float = 3.0
+    page_size: int = 250
+    min_interval_sec: float = 5.0
     max_slice_results: int = 4000
     arxiv_base_url: str = "https://export.arxiv.org/api/query"
 

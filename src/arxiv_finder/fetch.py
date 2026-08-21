@@ -60,6 +60,17 @@ def build_query(clause_query: str, start: datetime, end: datetime) -> str:
     return f"({clause_query}) AND submittedDate:{_date_window(start, end)}"
 
 
+def _retry_after_sec(resp: httpx.Response) -> float:
+    """Parse a ``Retry-After`` header value in seconds (0.0 if absent/invalid)."""
+    hdr = resp.headers.get("Retry-After")
+    if not hdr:
+        return 0.0
+    try:
+        return float(hdr)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def fetch_slice(
     client: httpx.Client,
     base_url: str,
@@ -67,6 +78,7 @@ def fetch_slice(
     page_size: int,
     throttle: Throttle,
     max_retries: int = 8,
+    max_results: int | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     entries: list[dict[str, Any]] = []
     start_idx = 0
@@ -81,10 +93,12 @@ def fetch_slice(
             "sortOrder": "ascending",
         }
         text = ""
+        retry_after = 0.0
         for attempt in range(max_retries):
             try:
                 resp = client.get(base_url, params=params)
                 if resp.status_code == 429:
+                    retry_after = _retry_after_sec(resp)
                     raise httpx.HTTPStatusError(
                         "rate limited", request=resp.request, response=resp
                     )
@@ -94,7 +108,10 @@ def fetch_slice(
             except httpx.HTTPError:
                 if attempt == max_retries - 1:
                     raise
-                time.sleep(min(120.0, 10.0 * (attempt + 1)))
+                backoff = min(120.0, 10.0 * (attempt + 1))
+                # Honor arXiv's Retry-After hint (when present) so we don't
+                # retry sooner than the server asked; still capped at 120s.
+                time.sleep(min(120.0, max(backoff, retry_after)))
         feed = feedparser.parse(text)
         if total is None:
             total = int(getattr(feed.feed, "opensearch_totalresults", 0) or 0)
@@ -102,6 +119,8 @@ def fetch_slice(
         for e in batch:
             entries.append(_entry_to_paper(e))
         start_idx += len(batch)
+        if max_results is not None and len(entries) >= max_results:
+            break
         if not batch or start_idx >= (total or 0):
             break
     return entries, total or 0
@@ -168,8 +187,9 @@ def fetch_papers(
                 if unit <= start_unit:
                     continue
                 query = build_query(clause.query, s_start, s_end)
-                entries, _total = fetch_slice(
-                    client, cfg.arxiv_base_url, query, cfg.page_size, throttle
+                entries, total = fetch_slice(
+                    client, cfg.arxiv_base_url, query, cfg.page_size, throttle,
+                    max_results=cfg.max_slice_results,
                 )
                 for paper in entries:
                     pub = paper["submitted"][:10]
@@ -180,11 +200,14 @@ def fetch_papers(
                     if aid not in results or paper["version"] > results[aid]["version"]:
                         results[aid] = paper
                 if progress:
-                    progress(
-                        unit,
-                        total_units,
-                        f"{clause.name} {s_start.strftime('%Y-%m-%d')}→{s_end.strftime('%Y-%m-%d')} done",
+                    note = ""
+                    if len(entries) >= cfg.max_slice_results and total > len(entries):
+                        note = f" [truncated at {cfg.max_slice_results} of {total}]"
+                    msg = (
+                        f"{clause.name} {s_start.strftime('%Y-%m-%d')}→"
+                        f"{s_end.strftime('%Y-%m-%d')} done{note}"
                     )
+                    progress(unit, total_units, msg)
                 if unit_done:
                     unit_done(unit)
     out = []

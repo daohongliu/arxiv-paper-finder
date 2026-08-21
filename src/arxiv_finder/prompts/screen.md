@@ -71,7 +71,7 @@ Note: technical proposals or frameworks for human oversight/control mechanisms (
 - Reward hacking in frontier model training (including diffusion models and large generative models)
 - Biosecurity risks from frontier AI (e.g. protein LMs misused for harm)
 - Security vulnerabilities specific to LLM-based systems (prompt injection, etc.)
-- AI-generated content detection, watermarking, and provenance labeling (detecting deepfakes, AI-generated images/video/audio, watermarking generative model outputs)
+- AI-generated content detection, watermarking, and provenance labeling — qualify only when the core contribution is a frontier-model safety property (e.g. a provenance/watermark mechanism aimed at misuse, deception, or accountability of frontier models). Deepfake/AIGC detection or watermarking on its own is content provenance/forensics and is judged on the general safety grounds above; it is NOT automatically systemic safety.
 - Misuse of frontier AI in high-risk domains: cyber attacks, bioweapons, chemical weapons, or other CBRN (chemical, biological, radiological, nuclear) threats
 - Papers studying LLMs' moral or ethical reasoning capacity where the primary contribution concerns the model's alignment properties (flag for review if unsure whether it is about the model or about human ethics)
 

@@ -24,7 +24,8 @@ export interface AffiliationAuthor {
 export interface PaperDetail extends PaperSummary {
   version: number;
   abstract: string;
-  authors: string[];  categories: string[];
+  authors: string[];
+  categories: string[];
   updated: string;
   pdf_url: string;
   comments: string | null;
@@ -34,6 +35,7 @@ export interface PaperDetail extends PaperSummary {
     method: string;
     status: string;
     authors: AffiliationAuthor[];
+    likely_mainland_china: string | null;
     error: string | null;
     created_at: string;
   } | null;

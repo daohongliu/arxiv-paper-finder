@@ -24,7 +24,7 @@ def store_papers(conn: sqlite3.Connection, papers: list[dict[str, Any]]) -> dict
     name_filtered = 0
     for p in papers:
         row = conn.execute(
-            "SELECT id, version, queries_json FROM papers WHERE arxiv_id = ?",
+            "SELECT id, version, queries_json, status FROM papers WHERE arxiv_id = ?",
             (p["arxiv_id"],),
         ).fetchone()
         queries = set(p.get("queries", []))
@@ -71,6 +71,12 @@ def store_papers(conn: sqlite3.Connection, papers: list[dict[str, Any]]) -> dict
                         "pdf_url": p["pdf_url"],
                     }
                 )
+                # A new version can add a Chinese author; a paper we previously
+                # name-filtered should then be promoted so it isn't lost forever.
+                if row["status"] == "filtered_out" and any_plausible_chinese_author(
+                    p["authors_json"]
+                ):
+                    updates["status"] = "fetched"
             sets = ", ".join(f"{k} = ?" for k in updates)
             conn.execute(
                 f"UPDATE papers SET {sets} WHERE id = ?",
@@ -211,8 +217,8 @@ def _extraction_task(
     authors = parsed.get("authors")
     if not isinstance(authors, list):
         raise ValueError("model output missing 'authors' list")
-    return {"authors": authors, "method": method, "response": response,
-            "text_chars": len(first_text)}
+    return {"authors": authors, "likely": str(parsed.get("likely_mainland_china") or "").lower(),
+            "method": method, "response": response, "text_chars": len(first_text)}
 
 
 def _mark_unresolved(conn: sqlite3.Connection, paper: dict[str, Any], cfg: AppConfig, err: str) -> None:
@@ -293,24 +299,33 @@ def run_affiliations(
         conn.execute("DELETE FROM affiliations WHERE paper_id = ?", (paper["id"],))
         conn.execute(
             """INSERT INTO affiliations (paper_id, prompt_version_id, model, method, status,
-               authors_json, created_at) VALUES (?, ?, ?, ?, 'ok', ?, ?)""",
+               authors_json, likely_mainland_china, created_at)
+               VALUES (?, ?, ?, ?, 'ok', ?, ?, ?)""",
             (
                 paper["id"],
                 prompt_version_id,
                 cfg.models.extraction,
                 out["method"],
                 json.dumps(out["authors"]),
+                out.get("likely") or "",
                 db.now_iso(),
             ),
         )
         ok, reason = passes_china_filter(out["authors"], cfg.china_filter)
+        likely = (out.get("likely") or "").strip().lower()
         if ok:
             new_status = "affiliated"
-        elif out["authors"] and all(a.get("mainland_china") == "unclear" for a in out["authors"]):
-            new_status = "needs_review"
-            reason = f"all {len(out['authors'])} authors unclear — review"
-        else:
+        elif likely == "no":
             new_status = "filtered_out"
+            reason = f"{reason}; paper-level verdict: no mainland involvement"
+        else:
+            # Recall-oriented keep: the model either judged the paper plausibly
+            # mainland ("yes") or couldn't rule it out ("unclear"/missing). Only
+            # an explicit "no" excludes; uncertainty keeps the paper so it is
+            # never silently dropped before screening.
+            ok = True
+            new_status = "affiliated"
+            reason = f"{reason}; paper-level verdict: {likely or 'unclear'} → keep for recall"
         conn.execute(
             "UPDATE papers SET status = ?, china_flag = ? WHERE id = ?",
             (new_status, 1 if ok else 0, paper["id"]),
@@ -353,7 +368,7 @@ def run_affiliations(
                 if should_stop and should_stop():
                     stopped = True
 
-    if stopped and should_stop and should_stop():
+    if stopped:
         stats["cancelled"] = 1
     return stats
 

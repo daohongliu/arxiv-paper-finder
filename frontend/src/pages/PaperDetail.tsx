@@ -135,6 +135,14 @@ export default function PaperDetailPage() {
                 ))}
               </tbody>
             </table>
+            {paper.affiliations.likely_mainland_china && (
+              <p className="mt-2 text-sm">
+                Paper-level mainland-CN verdict:{" "}
+                <Badge tone={paper.affiliations.likely_mainland_china === "yes" ? "green" : "zinc"}>
+                  {paper.affiliations.likely_mainland_china}
+                </Badge>
+              </p>
+            )}
             <p className="mt-2 text-xs text-zinc-500">
               model {paper.affiliations.model} · method {paper.affiliations.method} · {paper.affiliations.created_at}
             </p>

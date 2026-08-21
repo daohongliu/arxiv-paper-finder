@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type AppConfig } from "../api";
 import ConfigEditor from "../components/ConfigEditor";
+import PromptEditor from "../components/PromptEditor";
 import { Badge, Btn, Card, ErrorBanner, Field, Input, Select, Spinner } from "../ui";
 
 function todayISO(): string {
@@ -177,6 +178,10 @@ function RunPanel() {
 
       <div className="mt-4">
         <ConfigEditor config={current} onChange={(next) => setCfg(next)} />
+      </div>
+
+      <div className="mt-4">
+        <PromptEditor />
       </div>
     </Card>
   );

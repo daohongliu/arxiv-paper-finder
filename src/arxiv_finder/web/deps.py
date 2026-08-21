@@ -28,13 +28,6 @@ def parse_date_range(date_from: str, date_to: str) -> tuple[datetime, datetime]:
     return df, dt
 
 
-def row_to_dict(row: sqlite3.Row, extra: dict | None = None) -> dict:
-    d = dict(row)
-    if extra:
-        d.update(extra)
-    return d
-
-
 def json_field(row: sqlite3.Row, key: str):
     try:
         return json.loads(row[key])

@@ -50,6 +50,20 @@ class BulkDeleteBody(BaseModel):
     ids: list[int]
 
 
+_MAX_UPLOADS = 20
+
+
+def _rotate_uploads(directory: Path) -> None:
+    """Keep the newest N gt_upload files; delete older ones to avoid unbounded growth."""
+    uploads = sorted(
+        directory.glob("gt_upload_*"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for p in uploads[_MAX_UPLOADS:]:
+        p.unlink(missing_ok=True)
+
+
 def _delete_paper(conn: sqlite3.Connection, paper_id: int, arxiv_id: str) -> bool:
     conn.execute("DELETE FROM affiliations WHERE paper_id = ?", (paper_id,))
     conn.execute("DELETE FROM llm_calls WHERE paper_id = ?", (paper_id,))
@@ -234,6 +248,7 @@ def _papers_router():
                 "method": aff["method"],
                 "status": aff["status"],
                 "authors": json_field(aff, "authors_json") or [],
+                "likely_mainland_china": aff["likely_mainland_china"],
                 "error": aff["error"],
                 "created_at": aff["created_at"],
             }
@@ -610,6 +625,7 @@ def _labels_router():
             raise HTTPException(400, "only .csv or .jsonl supported")
         tmp = db.data_dir() / f"gt_upload_{db.now_iso().replace(':', '')}{suffix}"
         tmp.write_bytes(content)
+        _rotate_uploads(db.data_dir())
         try:
             gt = evalgt.load_ground_truth(tmp)
         except ValueError as exc:
