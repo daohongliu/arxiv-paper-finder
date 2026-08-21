@@ -16,11 +16,9 @@ export interface PaperSummary {
 
 export interface AffiliationAuthor {
   name: string;
-  affiliation_raw: string;
   institution: string;
   country: string;
   mainland_china: "yes" | "no" | "unclear";
-  note?: string;
 }
 
 export interface PaperDetail extends PaperSummary {
@@ -207,6 +205,8 @@ export const api = {
   createJob: (kind: string, params: Record<string, unknown>) =>
     request<{ job_id: number }>(`/api/jobs`, { method: "POST", body: JSON.stringify({ kind, params }) }),
   cancelJob: (id: number) => request<{ ok: boolean }>(`/api/jobs/${id}/cancel`, { method: "POST" }),
+  pauseJob: (id: number) => request<{ ok: boolean }>(`/api/jobs/${id}/pause`, { method: "POST" }),
+  resumeJob: (id: number) => request<{ ok: boolean }>(`/api/jobs/${id}/resume`, { method: "POST" }),
   models: () => request<{ models: string[] }>(`/api/models`),
 
   config: () => request<{ version_id: number; config: AppConfig }>(`/api/config`),

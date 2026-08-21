@@ -14,12 +14,14 @@ from .config import AppConfig
 from .fetch import ProgressCb, fetch_papers
 from .filters import passes_china_filter
 from .llm import LLMClient, LLMError, build_client, extract_json, render_prompt
+from .names import any_plausible_chinese_author
 
 DownloadFn = Callable[[str, str], Any]
 
 
-def store_papers(conn: sqlite3.Connection, papers: list[dict[str, Any]]) -> int:
+def store_papers(conn: sqlite3.Connection, papers: list[dict[str, Any]]) -> dict[str, int]:
     added = 0
+    name_filtered = 0
     for p in papers:
         row = conn.execute(
             "SELECT id, version, queries_json FROM papers WHERE arxiv_id = ?",
@@ -27,11 +29,16 @@ def store_papers(conn: sqlite3.Connection, papers: list[dict[str, Any]]) -> int:
         ).fetchone()
         queries = set(p.get("queries", []))
         if row is None:
+            if any_plausible_chinese_author(p["authors_json"]):
+                status = "fetched"
+            else:
+                status = "filtered_out"
+                name_filtered += 1
             conn.execute(
                 """INSERT INTO papers (arxiv_id, version, title, abstract, authors_json,
                    primary_category, categories_json, submitted, updated, abs_url, pdf_url,
                    comments, queries_json, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'fetched')""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     p["arxiv_id"],
                     p["version"],
@@ -46,6 +53,7 @@ def store_papers(conn: sqlite3.Connection, papers: list[dict[str, Any]]) -> int:
                     p["pdf_url"],
                     p.get("comments", ""),
                     json.dumps(sorted(queries)),
+                    status,
                 ),
             )
             added += 1
@@ -69,7 +77,7 @@ def store_papers(conn: sqlite3.Connection, papers: list[dict[str, Any]]) -> int:
                 (*updates.values(), row["id"]),
             )
     conn.commit()
-    return added
+    return {"added": added, "name_filtered": name_filtered}
 
 
 def run_fetch(
@@ -78,10 +86,56 @@ def run_fetch(
     date_from: datetime,
     date_to: datetime,
     progress: ProgressCb | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    start_unit: int = 0,
+    unit_done: Callable[[int], None] | None = None,
 ) -> dict[str, Any]:
-    papers = fetch_papers(cfg.search, date_from, date_to, progress)
-    added = store_papers(conn, papers)
-    return {"fetched": len(papers), "new": added}
+    papers = fetch_papers(
+        cfg.search, date_from, date_to, progress, should_stop,
+        start_unit=start_unit, unit_done=unit_done,
+    )
+    stored = store_papers(conn, papers)
+    return {"fetched": len(papers), "new": stored["added"],
+            "name_filtered": stored["name_filtered"]}
+
+
+def _chunks(seq: list[Any], size: int) -> list[list[Any]]:
+    return [seq[i : i + size] for i in range(0, len(seq), max(1, size))]
+
+
+def run_download(
+    conn: sqlite3.Connection,
+    cfg: AppConfig,
+    progress: ProgressCb | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    download_fn: DownloadFn | None = None,
+) -> dict[str, int]:
+    rows = conn.execute(
+        "SELECT arxiv_id, pdf_url FROM papers WHERE status = 'fetched' ORDER BY submitted"
+    ).fetchall()
+    todo = [dict(r) for r in rows if not pdf.pdf_path(r["arxiv_id"]).exists()]
+    stats = {"missing": len(todo), "downloaded": 0, "failed": 0}
+    if not todo:
+        return stats
+    download = download_fn or pdf.ensure_pdf
+    chunk_size = max(1, cfg.extraction.pdf_concurrency) * 2
+    done = 0
+    for batch in _chunks(todo, chunk_size):
+        if should_stop and should_stop():
+            break
+        with ThreadPoolExecutor(max_workers=max(1, cfg.extraction.pdf_concurrency)) as pool:
+            futures = {pool.submit(download, p["arxiv_id"], p["pdf_url"]): p for p in batch}
+            for fut in as_completed(futures):
+                paper = futures[fut]
+                done += 1
+                if progress:
+                    progress(done, len(todo), f"download {paper['arxiv_id']}")
+                try:
+                    fut.result()
+                    stats["downloaded"] += 1
+                except Exception:
+                    stats["failed"] += 1
+    return stats
 
 
 def _log_call(
@@ -202,20 +256,27 @@ def run_affiliations(
     stopped = False
 
     paths: dict[int, Any] = {}
-    with ThreadPoolExecutor(max_workers=max(1, cfg.extraction.pdf_concurrency)) as pool:
-        futures = {pool.submit(download, p["arxiv_id"], p["pdf_url"]): p for p in rows}
-        for i, fut in enumerate(as_completed(futures), 1):
-            paper = futures[fut]
-            if should_stop and should_stop():
-                stopped = True
-            if progress:
-                progress(i, 2 * len(rows), f"download {paper['arxiv_id']}")
-            try:
-                paths[paper["id"]] = fut.result()
-            except Exception as exc:
-                stats["processed"] += 1
-                stats["failed"] += 1
-                _mark_unresolved(conn, paper, cfg, f"download failed: {exc}")
+    chunk_size = max(1, cfg.extraction.pdf_concurrency) * 2
+    downloaded = 0
+    for batch in _chunks(rows, chunk_size):
+        if should_stop and should_stop():
+            stopped = True
+            break
+        with ThreadPoolExecutor(max_workers=max(1, cfg.extraction.pdf_concurrency)) as pool:
+            futures = {pool.submit(download, p["arxiv_id"], p["pdf_url"]): p for p in batch}
+            for fut in as_completed(futures):
+                paper = futures[fut]
+                downloaded += 1
+                if should_stop and should_stop():
+                    stopped = True
+                if progress:
+                    progress(downloaded, 2 * len(rows), f"download {paper['arxiv_id']}")
+                try:
+                    paths[paper["id"]] = fut.result()
+                except Exception as exc:
+                    stats["processed"] += 1
+                    stats["failed"] += 1
+                    _mark_unresolved(conn, paper, cfg, f"download failed: {exc}")
 
     pending = [p for p in rows if p["id"] in paths]
 
@@ -243,7 +304,13 @@ def run_affiliations(
             ),
         )
         ok, reason = passes_china_filter(out["authors"], cfg.china_filter)
-        new_status = "affiliated" if ok else "filtered_out"
+        if ok:
+            new_status = "affiliated"
+        elif out["authors"] and all(a.get("mainland_china") == "unclear" for a in out["authors"]):
+            new_status = "needs_review"
+            reason = f"all {len(out['authors'])} authors unclear — review"
+        else:
+            new_status = "filtered_out"
         conn.execute(
             "UPDATE papers SET status = ?, china_flag = ? WHERE id = ?",
             (new_status, 1 if ok else 0, paper["id"]),
@@ -251,31 +318,40 @@ def run_affiliations(
         conn.commit()
         return f"{new_status} ({reason})"
 
-    with ThreadPoolExecutor(max_workers=max(1, cfg.extraction.concurrency)) as pool:
-        futures2 = {
-            pool.submit(_extraction_task, client, cfg, prompt_text, p, paths[p["id"]]): p
-            for p in pending
-        }
-        for i, fut in enumerate(as_completed(futures2), 1):
-            paper = futures2[fut]
-            if progress:
-                progress(
-                    len(rows) + i,
-                    2 * len(rows),
-                    f"extract {paper['arxiv_id']}",
-                )
-            stats["processed"] += 1
-            try:
-                out = fut.result()
-                detail = apply_result(paper, out)
-                stats["ok"] += 1
+    extract_chunk = max(1, cfg.extraction.concurrency) * 2
+    extracted = 0
+    for batch in _chunks(pending, extract_chunk):
+        if should_stop and should_stop():
+            stopped = True
+            break
+        with ThreadPoolExecutor(max_workers=max(1, cfg.extraction.concurrency)) as pool:
+            futures2 = {
+                pool.submit(_extraction_task, client, cfg, prompt_text, p, paths[p["id"]]): p
+                for p in batch
+            }
+            for fut in as_completed(futures2):
+                paper = futures2[fut]
+                extracted += 1
                 if progress:
-                    progress(2 * len(rows), 2 * len(rows), f"{paper['arxiv_id']}: {detail}")
-            except Exception as exc:
-                stats["failed"] += 1
-                _mark_unresolved(conn, paper, cfg, f"extraction failed: {exc}")
-            if should_stop and should_stop():
-                stopped = True
+                    progress(
+                        len(rows) + extracted,
+                        2 * len(rows),
+                        f"extract {paper['arxiv_id']}",
+                    )
+                stats["processed"] += 1
+                try:
+                    out = fut.result()
+                    detail = apply_result(paper, out)
+                    stats["ok"] += 1
+                    if progress:
+                        progress(
+                            len(rows) + extracted, 2 * len(rows), f"{paper['arxiv_id']}: {detail}"
+                        )
+                except Exception as exc:
+                    stats["failed"] += 1
+                    _mark_unresolved(conn, paper, cfg, f"extraction failed: {exc}")
+                if should_stop and should_stop():
+                    stopped = True
 
     if stopped and should_stop and should_stop():
         stats["cancelled"] = 1
@@ -374,7 +450,11 @@ def run_screen(
     should_stop: Callable[[], bool] | None = None,
     client: LLMClient | None = None,
 ) -> dict[str, int]:
-    statuses = "('affiliated')" if not retry_review else "('affiliated', 'needs_review')"
+    statuses = (
+        "('affiliated')"
+        if not retry_review
+        else "('affiliated', 'needs_review', 'screen_error')"
+    )
     rows = [
         dict(r)
         for r in conn.execute(
@@ -392,32 +472,42 @@ def run_screen(
              "escalated": 0}
 
     def run_round(papers: list[dict[str, Any]], fulltext: bool, offset: int) -> None:
-        with ThreadPoolExecutor(max_workers=max(1, cfg.screen.concurrency)) as pool:
-            futures = {
-                pool.submit(_screen_task, client, cfg, prompt_text, p, fulltext): p
-                for p in papers
-            }
-            for i, fut in enumerate(as_completed(futures), 1):
-                paper = futures[fut]
-                if progress:
-                    progress(offset + i, offset + len(papers), f"screen {paper['arxiv_id']}")
-                stats["processed"] += 1 if not fulltext else 0
-                try:
-                    out = fut.result()
-                    status = _apply_screen(conn, paper, cfg, prompt_version_id, out)
-                    if status == "screened_included":
-                        stats["included"] += 1
-                    elif status == "screened_excluded":
-                        stats["excluded"] += 1
-                    else:
-                        stats["review"] += 1
-                except Exception:
-                    stats["failed"] += 1
-                    conn.execute(
-                        "UPDATE papers SET status = 'screen_error' WHERE id = ?",
-                        (paper["id"],),
-                    )
-                    conn.commit()
+        chunk_size = max(1, cfg.screen.concurrency) * 2
+        processed = 0
+        for batch in _chunks(papers, chunk_size):
+            if should_stop and should_stop():
+                break
+            with ThreadPoolExecutor(max_workers=max(1, cfg.screen.concurrency)) as pool:
+                futures = {
+                    pool.submit(_screen_task, client, cfg, prompt_text, p, fulltext): p
+                    for p in batch
+                }
+                for fut in as_completed(futures):
+                    paper = futures[fut]
+                    processed += 1
+                    if progress:
+                        progress(
+                            offset + processed, offset + len(papers), f"screen {paper['arxiv_id']}"
+                        )
+                    stats["processed"] += 1 if not fulltext else 0
+                    try:
+                        out = fut.result()
+                        status = _apply_screen(conn, paper, cfg, prompt_version_id, out)
+                        if status == "screened_included":
+                            stats["included"] += 1
+                        elif status == "screened_excluded":
+                            stats["excluded"] += 1
+                        else:
+                            stats["review"] += 1
+                    except Exception:
+                        stats["failed"] += 1
+                        conn.execute(
+                            "UPDATE papers SET status = 'screen_error' WHERE id = ?",
+                            (paper["id"],),
+                        )
+                        conn.commit()
+                    if should_stop and should_stop():
+                        break
 
     run_round(rows, fulltext=False, offset=0)
     if should_stop and should_stop():

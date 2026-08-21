@@ -46,6 +46,9 @@ ignore = [
     "RUF059",  # intentional unpacking for clarity
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"src/arxiv_finder/names.py" = ["SIM905"]  # surname lists kept as split() strings for readability
+
 [tool.mypy]
 python_version = "3.13"
 ignore_missing_imports = true

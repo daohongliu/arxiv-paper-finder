@@ -357,7 +357,7 @@ def _jobs_router():
     @router.post("/jobs", status_code=201)
     def create_job(body: JobCreate, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
         raw = body.params
-        if body.kind in ("fetch", "pipeline"):
+        if body.kind in ("fetch", "pipeline", "collect"):
             if not raw.get("date_from") or not raw.get("date_to"):
                 raise HTTPException(400, "date_from and date_to are required")
             df, dt = parse_date_range(str(raw["date_from"]), str(raw["date_to"]))
@@ -405,6 +405,20 @@ def _jobs_router():
         ok = jobs.cancel_job(conn, job_id)
         if not ok:
             raise HTTPException(400, "job is not cancellable")
+        return {"ok": True}
+
+    @router.post("/jobs/{job_id}/pause")
+    def pause(job_id: int, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+        ok = jobs.pause_job(conn, job_id)
+        if not ok:
+            raise HTTPException(400, "job is not pausable")
+        return {"ok": True}
+
+    @router.post("/jobs/{job_id}/resume")
+    def resume(job_id: int, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+        ok = jobs.resume_job(conn, job_id)
+        if not ok:
+            raise HTTPException(400, "job is not resumable")
         return {"ok": True}
 
     return router

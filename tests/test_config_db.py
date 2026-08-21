@@ -10,7 +10,7 @@ from arxiv_finder.config import AppConfig
 
 def test_default_config_valid():
     cfg = AppConfig()
-    assert len(cfg.search.clauses) == 7
+    assert len(cfg.search.clauses) == 52
     names = [c.name for c in cfg.search.clauses]
     assert "safety_phrases" in names
 
@@ -61,7 +61,7 @@ PAPER = {
     "version": 1,
     "title": "Test Paper",
     "abstract": "An abstract",
-    "authors_json": ["A", "B"],
+    "authors_json": ["Wei Zhang", "Li Liu"],
     "primary_category": "cs.AI",
     "categories": ["cs.AI"],
     "submitted": "2025-04-01T00:00:00Z",
@@ -73,12 +73,14 @@ PAPER = {
 
 
 def test_store_papers_insert_and_merge(conn):
-    added = stages.store_papers(conn, [PAPER])
-    assert added == 1
+    res = stages.store_papers(conn, [PAPER])
+    assert res["added"] == 1
+    assert res["name_filtered"] == 0
+    assert conn.execute("SELECT status FROM papers").fetchone()[0] == "fetched"
     again = dict(PAPER)
     again["queries"] = ["robustness_ai"]
-    added2 = stages.store_papers(conn, [again])
-    assert added2 == 0
+    res2 = stages.store_papers(conn, [again])
+    assert res2["added"] == 0
     row = conn.execute("SELECT queries_json, version FROM papers").fetchone()
     assert set(json.loads(row["queries_json"])) == {"safety_phrases", "robustness_ai"}
     newer = dict(PAPER, version=2, title="Test Paper v2")
@@ -86,3 +88,13 @@ def test_store_papers_insert_and_merge(conn):
     row = conn.execute("SELECT title, version FROM papers").fetchone()
     assert row["title"] == "Test Paper v2"
     assert row["version"] == 2
+
+
+def test_store_papers_name_filter(conn):
+    western = dict(PAPER, arxiv_id="2504.00002", authors_json=["John Smith", "Anna Novak"])
+    res = stages.store_papers(conn, [western])
+    assert res["added"] == 1
+    assert res["name_filtered"] == 1
+    assert conn.execute(
+        "SELECT status FROM papers WHERE arxiv_id='2504.00002'"
+    ).fetchone()[0] == "filtered_out"

@@ -116,7 +116,6 @@ export default function PaperDetailPage() {
                 <tr>
                   <th className="px-2 py-1">Author</th>
                   <th className="px-2 py-1">Institution</th>
-                  <th className="px-2 py-1">Affiliation (raw)</th>
                   <th className="px-2 py-1">Country</th>
                   <th className="px-2 py-1">Mainland CN</th>
                 </tr>
@@ -126,7 +125,6 @@ export default function PaperDetailPage() {
                   <tr key={i}>
                     <td className="px-2 py-1.5">{a.name}</td>
                     <td className="px-2 py-1.5 text-zinc-300">{a.institution}</td>
-                    <td className="max-w-xs px-2 py-1.5 text-xs text-zinc-500">{a.affiliation_raw}</td>
                     <td className="px-2 py-1.5 text-zinc-400">{a.country}</td>
                     <td className="px-2 py-1.5">
                       <Badge tone={a.mainland_china === "yes" ? "green" : a.mainland_china === "unclear" ? "amber" : "zinc"}>

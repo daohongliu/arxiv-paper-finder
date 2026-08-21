@@ -185,3 +185,48 @@ def test_run_screen_llm_error_marks_error(conn):
     stats = stages.run_screen(conn, cfg, pid, text, client=stub)
     assert stats["failed"] == 1
     assert conn.execute("SELECT status FROM papers").fetchone()["status"] == "screen_error"
+
+
+def test_run_screen_retry_includes_screen_error(conn):
+    db.seed_prompt(conn, "screen", "x {{title}} {{abstract}} {{categories}} {{extra}}")
+    pid, text = db.get_prompt(conn, "screen")
+    cfg = AppConfig()
+    _insert_papers(conn, 1, status="screen_error")
+    good = json.dumps(
+        {"is_frontier_ai_safety": True, "confidence": 0.9, "category": "alignment",
+         "subcategory": None, "rationale": "safety"}
+    )
+    stub = StubLLM([good])
+    stages.run_screen(conn, cfg, pid, text, retry_review=True, client=stub)
+    assert conn.execute("SELECT status FROM papers").fetchone()["status"] == "screened_included"
+
+
+ALL_UNCLEAR_JSON = json.dumps(
+    {
+        "authors": [
+            {"name": "A One", "institution": "", "country": "unclear", "mainland_china": "unclear"},
+            {"name": "B Two", "institution": "", "country": "unclear", "mainland_china": "unclear"},
+        ]
+    }
+)
+
+
+def test_run_affiliations_all_unclear_goes_to_review(conn, tmp_path, pdf_bytes, monkeypatch):
+    monkeypatch.setenv("ARXIV_FINDER_DATA", str(tmp_path))
+    db.seed_prompt(conn, "affiliations", "extract {{paper_text}} {{author_names}}")
+    pid, text = db.get_prompt(conn, "affiliations")
+    cfg = AppConfig()
+    _insert_papers(conn, 1)
+
+    def fake_download(arxiv_id: str, url: str) -> Path:
+        p = tmp_path / f"{arxiv_id}.pdf"
+        p.write_bytes(pdf_bytes)
+        return p
+
+    stub = StubLLM([ALL_UNCLEAR_JSON])
+    stats = stages.run_affiliations(conn, cfg, pid, text, client=stub,
+                                    download_fn=fake_download)
+    assert stats["ok"] == 1
+    row = conn.execute("SELECT status, china_flag FROM papers").fetchone()
+    assert row["status"] == "needs_review"
+    assert row["china_flag"] == 0

@@ -66,7 +66,7 @@ def fetch_slice(
     query: str,
     page_size: int,
     throttle: Throttle,
-    max_retries: int = 5,
+    max_retries: int = 8,
 ) -> tuple[list[dict[str, Any]], int]:
     entries: list[dict[str, Any]] = []
     start_idx = 0
@@ -94,7 +94,7 @@ def fetch_slice(
             except httpx.HTTPError:
                 if attempt == max_retries - 1:
                     raise
-                time.sleep(10.0 * (attempt + 1))
+                time.sleep(min(120.0, 10.0 * (attempt + 1)))
         feed = feedparser.parse(text)
         if total is None:
             total = int(getattr(feed.feed, "opensearch_totalresults", 0) or 0)
@@ -143,6 +143,9 @@ def fetch_papers(
     start: datetime,
     end: datetime,
     progress: ProgressCb | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    start_unit: int = 0,
+    unit_done: Callable[[int], None] | None = None,
 ) -> list[dict[str, Any]]:
     throttle = Throttle(cfg.min_interval_sec)
     results: dict[str, dict[str, Any]] = {}
@@ -152,17 +155,19 @@ def fetch_papers(
     slices = month_slices(start, end)
     total_units = len(slices) * len(cfg.clauses)
     unit = 0
+    stopped = False
     with httpx.Client(timeout=60.0) as client:
         for s_start, s_end in slices:
+            if stopped:
+                break
             for clause in cfg.clauses:
                 unit += 1
+                if should_stop and should_stop():
+                    stopped = True
+                    break
+                if unit <= start_unit:
+                    continue
                 query = build_query(clause.query, s_start, s_end)
-                if progress:
-                    progress(
-                        unit,
-                        total_units,
-                        f"{clause.name} {s_start.strftime('%Y-%m-%d')}→{s_end.strftime('%Y-%m-%d')}",
-                    )
                 entries, _total = fetch_slice(
                     client, cfg.arxiv_base_url, query, cfg.page_size, throttle
                 )
@@ -174,6 +179,14 @@ def fetch_papers(
                     query_hits.setdefault(aid, set()).add(clause.name)
                     if aid not in results or paper["version"] > results[aid]["version"]:
                         results[aid] = paper
+                if progress:
+                    progress(
+                        unit,
+                        total_units,
+                        f"{clause.name} {s_start.strftime('%Y-%m-%d')}→{s_end.strftime('%Y-%m-%d')} done",
+                    )
+                if unit_done:
+                    unit_done(unit)
     out = []
     for aid, paper in results.items():
         paper["queries"] = sorted(query_hits.get(aid, set()))
