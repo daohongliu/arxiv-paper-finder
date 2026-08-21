@@ -139,6 +139,27 @@ def test_run_affiliations_download_failure(conn, tmp_path, monkeypatch):
     assert retried["failed"] == 2
 
 
+def test_run_affiliations_withdrawn_is_dropped(conn):
+    db.seed_prompt(conn, "affiliations", "x")
+    pid, text = db.get_prompt(conn, "affiliations")
+    cfg = AppConfig()
+    _insert_papers(conn, 2)
+
+    def withdrawn_download(arxiv_id: str, url: str):
+        raise pdf.PDFNotFoundError("HTTP 404: withdrawn")
+
+    stub = StubLLM([AFF_JSON])
+    stats = stages.run_affiliations(conn, cfg, pid, text, client=stub,
+                                    download_fn=withdrawn_download)
+    assert stats["failed"] == 2 and stats["ok"] == 0
+    rows = conn.execute("SELECT status FROM papers").fetchall()
+    assert all(r["status"] == "withdrawn" for r in rows)
+    # Withdrawn papers are permanently dropped: a retry pass must not pick them up.
+    retried = stages.run_affiliations(conn, cfg, pid, text, retry_failed=True,
+                                      client=stub, download_fn=withdrawn_download)
+    assert retried["processed"] == 0
+
+
 def test_run_screen_parallel(conn):
     db.seed_prompt(conn, "screen", "{{title}} {{abstract}} {{categories}} {{extra}}")
     pid, text = db.get_prompt(conn, "screen")

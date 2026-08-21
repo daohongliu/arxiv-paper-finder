@@ -11,6 +11,10 @@ from .db import pdf_cache_dir
 _USER_AGENT = "arxiv-paper-finder/0.1 (research dataset tool)"
 
 
+class PDFNotFoundError(RuntimeError):
+    """A paper's PDF is permanently unavailable (HTTP 404/410, e.g. withdrawn)."""
+
+
 def pdf_path(arxiv_id: str) -> Path:
     return pdf_cache_dir() / f"{arxiv_id.replace('/', '_')}.pdf"
 
@@ -26,6 +30,11 @@ def ensure_pdf(arxiv_id: str, pdf_url: str, retries: int = 3) -> Path:
                 timeout=120.0, follow_redirects=True, headers={"User-Agent": _USER_AGENT}
             ) as client:
                 resp = client.get(pdf_url)
+                if resp.status_code in (404, 410):
+                    # Permanent: withdrawn/removed. Don't retry; signal the caller.
+                    raise PDFNotFoundError(
+                        f"PDF not available (HTTP {resp.status_code}) for {arxiv_id}"
+                    )
                 resp.raise_for_status()
                 content = resp.content
             if len(content) < 1024 or not content.startswith(b"%PDF"):

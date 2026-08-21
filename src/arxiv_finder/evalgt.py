@@ -87,6 +87,7 @@ def evaluate(conn: sqlite3.Connection, gt: list[dict[str, Any]]) -> dict[str, An
         "not_fetched": [],
         "filtered_out": [],
         "unresolved": [],
+        "withdrawn": [],
         "screened_excluded": [],
         "needs_review": [],
         "other": [],
@@ -109,6 +110,8 @@ def evaluate(conn: sqlite3.Connection, gt: list[dict[str, Any]]) -> dict[str, An
             dropped_at["filtered_out"].append(item["arxiv_id"])
         elif status in ("unresolved", "screen_error"):
             dropped_at["unresolved"].append(item["arxiv_id"])
+        elif status == "withdrawn":
+            dropped_at["withdrawn"].append(item["arxiv_id"])
         elif status == "screened_excluded":
             dropped_at["screened_excluded"].append(item["arxiv_id"])
         elif status == "needs_review":

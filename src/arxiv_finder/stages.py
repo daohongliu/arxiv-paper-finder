@@ -232,6 +232,24 @@ def _mark_unresolved(conn: sqlite3.Connection, paper: dict[str, Any], cfg: AppCo
     conn.commit()
 
 
+def _mark_withdrawn(conn: sqlite3.Connection, paper: dict[str, Any], cfg: AppConfig, err: str) -> None:
+    """Permanently drop a paper whose PDF is unavailable (withdrawn/removed).
+
+    Unlike ``unresolved`` (retried on the next retry pass), ``withdrawn`` papers are
+    excluded from the pipeline for good: no amount of retrying will produce a PDF.
+    """
+    conn.execute("DELETE FROM affiliations WHERE paper_id = ?", (paper["id"],))
+    conn.execute(
+        "UPDATE papers SET status = 'withdrawn', china_flag = 0 WHERE id = ?", (paper["id"],)
+    )
+    conn.execute(
+        """INSERT INTO affiliations (paper_id, model, method, status, authors_json,
+           error, created_at) VALUES (?, ?, 'text', 'error', '[]', ?, ?)""",
+        (paper["id"], cfg.models.extraction, err[:1000], db.now_iso()),
+    )
+    conn.commit()
+
+
 def run_affiliations(
     conn: sqlite3.Connection,
     cfg: AppConfig,
@@ -279,6 +297,10 @@ def run_affiliations(
                     progress(downloaded, 2 * len(rows), f"download {paper['arxiv_id']}")
                 try:
                     paths[paper["id"]] = fut.result()
+                except pdf.PDFNotFoundError as exc:
+                    stats["processed"] += 1
+                    stats["failed"] += 1
+                    _mark_withdrawn(conn, paper, cfg, f"withdrawn/unavailable: {exc}")
                 except Exception as exc:
                     stats["processed"] += 1
                     stats["failed"] += 1

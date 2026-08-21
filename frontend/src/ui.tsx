@@ -30,7 +30,7 @@ export function statusTone(status: string): string {
   if (status === "screened_excluded") return "zinc";
   if (status === "affiliated") return "blue";
   if (status === "needs_review" || status === "unresolved" || status === "screen_error") return "amber";
-  if (status === "filtered_out") return "red";
+  if (status === "filtered_out" || status === "withdrawn") return "red";
   return "zinc";
 }
 
