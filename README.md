@@ -38,6 +38,12 @@ EOF
 uv run arxiv-finder init      # create SQLite DB + seed config/prompts
 ```
 
+Build the web UI (once; `serve` only hosts the frontend if `frontend/dist` exists):
+
+```bash
+cd frontend && npm install && npm run build   # → frontend/dist
+```
+
 ## Running
 
 ```bash
