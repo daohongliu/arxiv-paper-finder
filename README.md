@@ -58,6 +58,35 @@ uv run arxiv-finder serve     # web UI + API at http://127.0.0.1:8000
 
 CLI equivalents: `fetch`, `affiliations`, `screen`, `export`, `review-export`, `eval`, `stats`.
 
+## Frontend
+
+A React 19 + TypeScript SPA (Vite, Tailwind CSS v4, TanStack Query, react-router) in `frontend/`.
+It talks to the backend exclusively through the `/api` REST endpoints.
+
+**Layout:**
+- `src/api.ts` — typed client for every backend endpoint (papers, jobs, config, prompts, eval)
+- `src/pages/` — Dashboard, Papers, PaperDetail, Review, Jobs, Eval
+- `src/components/` — `ConfigEditor` (search clauses + advanced settings), `PromptEditor` (LLM prompts)
+- `src/ui.tsx` — shared UI primitives (cards, buttons, inputs, badges, spinners, error banners)
+- `src/App.tsx` — shell layout + routing
+
+**Developing (hot reload):**
+
+```bash
+uv run arxiv-finder serve &                # backend API on :8000
+cd frontend && npm install && npm run dev  # Vite dev server on :5173, proxies /api → :8000
+```
+
+**Building (what `serve` hosts):**
+
+```bash
+cd frontend && npm run build   # emits frontend/dist, served by FastAPI for non-API routes
+```
+
+`arxiv-finder serve` returns the built `frontend/dist` for any non-`/api` route, so after
+frontend changes you either run the Vite dev server during development or rebuild `dist`
+for the served version.
+
 ## Development
 
 ```bash
