@@ -54,6 +54,10 @@ class LLMClient:
             payload["max_tokens"] = max_tokens
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        # DeepSeek V4 reasoning models think by default and bill the
+        # `reasoning_content` tokens; this pipeline only needs the final JSON,
+        # so disable thinking to skip that overhead.
+        payload["thinking"] = {"type": "disabled"}
 
         url = f"{self.base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}"}

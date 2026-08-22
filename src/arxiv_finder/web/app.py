@@ -174,6 +174,8 @@ def _papers_router():
         category: str | None = Query(None),
         subcategory: str | None = Query(None),
         china: bool | None = Query(None),
+        gt: bool | None = Query(None),
+        included: bool | None = Query(None),
         q: str | None = Query(None),
         date_from: str | None = Query(None),
         date_to: str | None = Query(None),
@@ -196,6 +198,11 @@ def _papers_router():
         if china is not None:
             where.append("china_flag = ?")
             args.append(1 if china else 0)
+        if gt is not None:
+            sub = "EXISTS (SELECT 1 FROM ground_truth g WHERE g.arxiv_id = papers.arxiv_id)"
+            where.append(sub if gt else f"NOT {sub}")
+        if included is not None:
+            where.append("status = 'screened_included'" if included else "status != 'screened_included'")
         if q:
             where.append("(title LIKE ? OR abstract LIKE ? OR arxiv_id LIKE ?)")
             like = f"%{q}%"
@@ -216,7 +223,9 @@ def _papers_router():
         total = conn.execute(f"SELECT COUNT(*) AS n FROM papers {where_sql}", args).fetchone()["n"]
         rows = conn.execute(
             f"""SELECT id, arxiv_id, title, submitted, status, category, subcategory,
-                confidence, china_flag, primary_category, queries_json, abs_url
+                confidence, china_flag, primary_category, queries_json, abs_url,
+                EXISTS (SELECT 1 FROM ground_truth g WHERE g.arxiv_id = papers.arxiv_id) AS in_gt,
+                (SELECT g.category FROM ground_truth g WHERE g.arxiv_id = papers.arxiv_id) AS gt_category
                 FROM papers {where_sql} ORDER BY submitted DESC
                 LIMIT ? OFFSET ?""",
             (*args, page_size, (page - 1) * page_size),
@@ -225,6 +234,8 @@ def _papers_router():
         for r in rows:
             d = dict(r)
             d["queries"] = json_field(r, "queries_json") or []
+            d["in_gt"] = bool(r["in_gt"])
+            d["gt_category"] = r["gt_category"]
             d["pdf_cached"] = pdf_mod.pdf_path(r["arxiv_id"]).exists()
             items.append(d)
         return {"total": total, "page": page, "page_size": page_size, "items": items}
@@ -239,6 +250,13 @@ def _papers_router():
         d["categories"] = json_field(row, "categories_json") or []
         d["queries"] = json_field(row, "queries_json") or []
         d["pdf_cached"] = pdf_mod.pdf_path(row["arxiv_id"]).exists()
+        gt_row = conn.execute(
+            "SELECT category, subcategory, imported_at FROM ground_truth WHERE arxiv_id = ?",
+            (row["arxiv_id"],),
+        ).fetchone()
+        d["in_gt"] = gt_row is not None
+        d["gt_category"] = gt_row["category"] if gt_row else None
+        d["gt_subcategory"] = gt_row["subcategory"] if gt_row else None
         aff = conn.execute(
             "SELECT * FROM affiliations WHERE paper_id = ?", (paper_id,)
         ).fetchone()
@@ -328,6 +346,42 @@ def _papers_router():
                 pdfs_removed += 1
             deleted += 1
         return {"ok": True, "deleted": deleted, "pdfs_removed": pdfs_removed}
+
+    @router.post("/papers/{paper_id}/affiliate")
+    def affiliate_paper(
+        paper_id: int, conn: sqlite3.Connection = Depends(get_conn)
+    ) -> dict:
+        """Run the affiliations stage on this one paper (downloads its PDF if needed)."""
+        from .. import stages
+        from ..llm import LLMError
+
+        row = conn.execute("SELECT id FROM papers WHERE id = ?", (paper_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "paper not found")
+        _, cfg = current_cfg(conn)
+        pid, text = db.get_prompt(conn, "affiliations")
+        try:
+            result = stages.affiliate_one(conn, cfg, paper_id, pid, text)
+        except LLMError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        return {"ok": True, **result}
+
+    @router.post("/papers/{paper_id}/screen")
+    def screen_paper(paper_id: int, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+        """Run the screening stage on this one paper (escalates to full text if unsure)."""
+        from .. import stages
+        from ..llm import LLMError
+
+        row = conn.execute("SELECT id FROM papers WHERE id = ?", (paper_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "paper not found")
+        _, cfg = current_cfg(conn)
+        pid, text = db.get_prompt(conn, "screen")
+        try:
+            result = stages.screen_one(conn, cfg, paper_id, pid, text)
+        except LLMError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        return {"ok": True, **result}
 
     @router.get("/export")
     def export_csv(
@@ -599,6 +653,17 @@ def _stats_router():
         active_jobs = conn.execute(
             "SELECT COUNT(*) AS n FROM jobs WHERE status IN ('queued', 'running')"
         ).fetchone()["n"]
+        gt_total = conn.execute("SELECT COUNT(*) AS n FROM ground_truth").fetchone()["n"]
+        gt_in_db = conn.execute(
+            """SELECT COUNT(*) AS n FROM papers p
+               WHERE EXISTS (SELECT 1 FROM ground_truth g WHERE g.arxiv_id = p.arxiv_id)"""
+        ).fetchone()["n"]
+        gt_included = conn.execute(
+            """SELECT COUNT(*) AS n FROM papers p
+               WHERE p.status = 'screened_included'
+                 AND EXISTS (SELECT 1 FROM ground_truth g WHERE g.arxiv_id = p.arxiv_id)"""
+        ).fetchone()["n"]
+        included = by_status.get("screened_included", 0)
         return {
             "papers_total": total,
             "by_status": by_status,
@@ -607,6 +672,16 @@ def _stats_router():
             "llm": {"calls": tokens["calls"], "input_tokens": tokens["tin"],
                     "output_tokens": tokens["tout"]},
             "active_jobs": active_jobs,
+            "ground_truth": {
+                "total": gt_total,
+                "in_db": gt_in_db,
+                "matrix": {
+                    "in_gt_included": gt_included,
+                    "in_gt_not_included": gt_in_db - gt_included,
+                    "not_in_gt_included": included - gt_included,
+                    "not_in_gt_not_included": (total - gt_in_db) - (included - gt_included),
+                },
+            },
         }
 
     return router
@@ -632,10 +707,26 @@ def _labels_router():
             raise HTTPException(400, str(exc)) from exc
         if not gt:
             raise HTTPException(400, "no parsable rows found")
+        # Persist ground-truth membership so the Papers list can flag/filter by it.
+        # This is the only place GT data is stored; it is never fed to the LLM
+        # (extraction/screening prompts are built purely from paper fields).
+        now = db.now_iso()
+        for item in gt:
+            conn.execute(
+                """INSERT INTO ground_truth (arxiv_id, category, subcategory, imported_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(arxiv_id) DO UPDATE SET
+                     category = excluded.category,
+                     subcategory = excluded.subcategory,
+                     imported_at = excluded.imported_at""",
+                (item["arxiv_id"], item["category"] or None, item["subcategory"], now),
+            )
+        conn.commit()
         report = evalgt.evaluate(conn, gt)
         report.pop("included_details", None)
         report["saved_to"] = str(tmp)
         report["rows_parsed"] = len(gt)
+        report["gt_rows_imported"] = len(gt)
         return report
 
     return router

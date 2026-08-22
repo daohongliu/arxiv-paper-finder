@@ -175,7 +175,7 @@ def test_run_screen_parallel(conn):
                for r in rows)
 
 
-def test_run_screen_escalation(conn, tmp_path, pdf_bytes, monkeypatch):
+def test_run_screen_no_escalation_auto_excludes(conn, tmp_path, pdf_bytes, monkeypatch):
     monkeypatch.setenv("ARXIV_FINDER_DATA", str(tmp_path / "data"))
     db.seed_prompt(conn, "screen", "{{title}} {{abstract}} {{categories}} {{extra}}")
     pid, text = db.get_prompt(conn, "screen")
@@ -187,14 +187,14 @@ def test_run_screen_escalation(conn, tmp_path, pdf_bytes, monkeypatch):
     cache_path.write_bytes(pdf_bytes)
     stub = StubLLM([SCREEN_ESCALATE, SCREEN_FULLTEXT_INCLUDE])
     stats = stages.run_screen(conn, cfg, pid, text, client=stub)
-    assert stats["escalated"] == 1
-    assert stats["included"] == 1
-    assert stub.call_count == 2
+    assert stats["escalated"] == 0
+    assert stats["excluded"] == 1
+    assert stub.call_count == 1
     row = conn.execute("SELECT status, category FROM papers").fetchone()
-    assert row["status"] == "screened_included"
-    assert row["category"] == "robustness"
+    assert row["status"] == "screened_excluded"
+    assert row["category"] is None
     stages_seen = {r["stage"] for r in conn.execute("SELECT stage FROM llm_calls")}
-    assert stages_seen == {"screen", "screen_fulltext"}
+    assert stages_seen == {"screen"}
 
 
 def test_run_screen_llm_error_marks_error(conn):

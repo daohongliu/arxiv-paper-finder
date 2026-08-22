@@ -92,6 +92,13 @@ CREATE TABLE IF NOT EXISTS labels (
 );
 CREATE INDEX IF NOT EXISTS idx_labels_arxiv_id ON labels(arxiv_id);
 
+CREATE TABLE IF NOT EXISTS ground_truth (
+  arxiv_id TEXT PRIMARY KEY,
+  category TEXT,
+  subcategory TEXT,
+  imported_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY,
   kind TEXT NOT NULL,

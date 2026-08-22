@@ -203,7 +203,7 @@ class SearchConfig(BaseModel):
 class ExtractionConfig(BaseModel):
     min_text_chars: int = 150
     max_first_page_chars: int = 7000
-    vision_fallback: bool = True
+    vision_fallback: bool = False
     concurrency: int = 50
     pdf_concurrency: int = 8
 
@@ -227,9 +227,9 @@ class ScreenConfig(BaseModel):
 
 
 class ModelsConfig(BaseModel):
-    extraction: str = "qwen3.8-max"
-    screen_cheap: str = "qwen3.8-max"
-    screen_strong: str = "qwen3.8-max"
+    extraction: str = "deepseek-v4-flash"
+    screen_cheap: str = "deepseek-v4-flash"
+    screen_strong: str = "deepseek-v4-flash"
 
 
 class LLMClientConfig(BaseModel):

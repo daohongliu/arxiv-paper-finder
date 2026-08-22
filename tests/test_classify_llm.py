@@ -49,11 +49,10 @@ def test_decide_excluded():
     assert decide(r, 0.6, 0.5, escalated=False) == ("screened_excluded", "excluded")
 
 
-def test_decide_escalates():
+def test_decide_auto_excludes_when_unsure():
     r = parse_screen_result({"is_frontier_ai_safety": True, "confidence": 0.4})
     status, action = decide(r, 0.6, 0.5, escalated=False)
-    assert status == "needs_review"
-    assert action == "escalate"
+    assert (status, action) == ("screened_excluded", "excluded")
 
 
 def test_decide_after_escalation_review():

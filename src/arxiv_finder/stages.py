@@ -135,7 +135,7 @@ def run_download(
                 paper = futures[fut]
                 done += 1
                 if progress:
-                    progress(done, len(todo), f"download {paper['arxiv_id']}")
+                    progress(done, len(todo), f"Downloading PDF for {paper['arxiv_id']}")
                 try:
                     fut.result()
                     stats["downloaded"] += 1
@@ -250,6 +250,64 @@ def _mark_withdrawn(conn: sqlite3.Connection, paper: dict[str, Any], cfg: AppCon
     conn.commit()
 
 
+def _apply_affiliation(
+    conn: sqlite3.Connection,
+    paper: dict[str, Any],
+    cfg: AppConfig,
+    prompt_version_id: int,
+    out: dict[str, Any],
+) -> str:
+    """Persist one affiliation-extraction result and re-derive the paper's status.
+
+    Shared by the batch ``run_affiliations`` and the single-paper ``affiliate_one``.
+    """
+    _log_call(
+        conn,
+        paper["id"],
+        f"affiliations:{out['method']}",
+        cfg.models.extraction,
+        prompt_version_id,
+        f"{paper['arxiv_id']} ({out['method']}, {out['text_chars']} chars)",
+        out["response"],
+    )
+    conn.execute("DELETE FROM affiliations WHERE paper_id = ?", (paper["id"],))
+    conn.execute(
+        """INSERT INTO affiliations (paper_id, prompt_version_id, model, method, status,
+           authors_json, likely_mainland_china, created_at)
+           VALUES (?, ?, ?, ?, 'ok', ?, ?, ?)""",
+        (
+            paper["id"],
+            prompt_version_id,
+            cfg.models.extraction,
+            out["method"],
+            json.dumps(out["authors"]),
+            out.get("likely") or "",
+            db.now_iso(),
+        ),
+    )
+    ok, reason = passes_china_filter(out["authors"], cfg.china_filter)
+    likely = (out.get("likely") or "").strip().lower()
+    if ok:
+        new_status = "affiliated"
+    elif likely == "no":
+        new_status = "filtered_out"
+        reason = f"{reason}; paper-level verdict: no mainland involvement"
+    else:
+        # Recall-oriented keep: the model either judged the paper plausibly
+        # mainland ("yes") or couldn't rule it out ("unclear"/missing). Only
+        # an explicit "no" excludes; uncertainty keeps the paper so it is
+        # never silently dropped before screening.
+        ok = True
+        new_status = "affiliated"
+        reason = f"{reason}; paper-level verdict: {likely or 'unclear'} → keep for recall"
+    conn.execute(
+        "UPDATE papers SET status = ?, china_flag = ? WHERE id = ?",
+        (new_status, 1 if ok else 0, paper["id"]),
+    )
+    conn.commit()
+    return f"{new_status} ({reason})"
+
+
 def run_affiliations(
     conn: sqlite3.Connection,
     cfg: AppConfig,
@@ -294,7 +352,7 @@ def run_affiliations(
                 if should_stop and should_stop():
                     stopped = True
                 if progress:
-                    progress(downloaded, 2 * len(rows), f"download {paper['arxiv_id']}")
+                    progress(downloaded, 2 * len(rows), f"Downloading PDF for {paper['arxiv_id']}")
                 try:
                     paths[paper["id"]] = fut.result()
                 except pdf.PDFNotFoundError as exc:
@@ -307,53 +365,6 @@ def run_affiliations(
                     _mark_unresolved(conn, paper, cfg, f"download failed: {exc}")
 
     pending = [p for p in rows if p["id"] in paths]
-
-    def apply_result(paper: dict[str, Any], out: dict[str, Any]) -> str:
-        _log_call(
-            conn,
-            paper["id"],
-            f"affiliations:{out['method']}",
-            cfg.models.extraction,
-            prompt_version_id,
-            f"{paper['arxiv_id']} ({out['method']}, {out['text_chars']} chars)",
-            out["response"],
-        )
-        conn.execute("DELETE FROM affiliations WHERE paper_id = ?", (paper["id"],))
-        conn.execute(
-            """INSERT INTO affiliations (paper_id, prompt_version_id, model, method, status,
-               authors_json, likely_mainland_china, created_at)
-               VALUES (?, ?, ?, ?, 'ok', ?, ?, ?)""",
-            (
-                paper["id"],
-                prompt_version_id,
-                cfg.models.extraction,
-                out["method"],
-                json.dumps(out["authors"]),
-                out.get("likely") or "",
-                db.now_iso(),
-            ),
-        )
-        ok, reason = passes_china_filter(out["authors"], cfg.china_filter)
-        likely = (out.get("likely") or "").strip().lower()
-        if ok:
-            new_status = "affiliated"
-        elif likely == "no":
-            new_status = "filtered_out"
-            reason = f"{reason}; paper-level verdict: no mainland involvement"
-        else:
-            # Recall-oriented keep: the model either judged the paper plausibly
-            # mainland ("yes") or couldn't rule it out ("unclear"/missing). Only
-            # an explicit "no" excludes; uncertainty keeps the paper so it is
-            # never silently dropped before screening.
-            ok = True
-            new_status = "affiliated"
-            reason = f"{reason}; paper-level verdict: {likely or 'unclear'} → keep for recall"
-        conn.execute(
-            "UPDATE papers SET status = ?, china_flag = ? WHERE id = ?",
-            (new_status, 1 if ok else 0, paper["id"]),
-        )
-        conn.commit()
-        return f"{new_status} ({reason})"
 
     extract_chunk = max(1, cfg.extraction.concurrency) * 2
     extracted = 0
@@ -373,16 +384,22 @@ def run_affiliations(
                     progress(
                         len(rows) + extracted,
                         2 * len(rows),
-                        f"extract {paper['arxiv_id']}",
+                        f"Identifying affiliations for {paper['arxiv_id']}",
                     )
                 stats["processed"] += 1
                 try:
                     out = fut.result()
-                    detail = apply_result(paper, out)
+                    detail = _apply_affiliation(conn, paper, cfg, prompt_version_id, out)
                     stats["ok"] += 1
                     if progress:
+                        verdict = (
+                            "kept for screening"
+                            if detail.startswith("affiliated")
+                            else "skipped (no China affiliation)"
+                        )
                         progress(
-                            len(rows) + extracted, 2 * len(rows), f"{paper['arxiv_id']}: {detail}"
+                            len(rows) + extracted, 2 * len(rows),
+                            f"{paper['arxiv_id']}: {verdict}",
                         )
                 except Exception as exc:
                     stats["failed"] += 1
@@ -460,13 +477,14 @@ def _apply_screen(
     status, action = decide(
         result, cfg.screen.escalate_below, cfg.screen.review_below, out["fulltext"]
     )
+    included = status == "screened_included"
     conn.execute(
         """UPDATE papers SET status = ?, category = ?, subcategory = ?,
            confidence = ?, rationale = ? WHERE id = ?""",
         (
             status,
-            result.category if result.is_frontier_ai_safety else None,
-            result.subcategory if result.is_frontier_ai_safety else None,
+            result.category if included else None,
+            result.subcategory if included else None,
             result.confidence,
             result.rationale,
             paper["id"],
@@ -522,20 +540,24 @@ def run_screen(
                 for fut in as_completed(futures):
                     paper = futures[fut]
                     processed += 1
-                    if progress:
-                        progress(
-                            offset + processed, offset + len(papers), f"screen {paper['arxiv_id']}"
-                        )
                     stats["processed"] += 1 if not fulltext else 0
                     try:
                         out = fut.result()
                         status = _apply_screen(conn, paper, cfg, prompt_version_id, out)
                         if status == "screened_included":
                             stats["included"] += 1
+                            verdict = "included in dataset"
                         elif status == "screened_excluded":
                             stats["excluded"] += 1
+                            verdict = "excluded"
                         else:
                             stats["review"] += 1
+                            verdict = "flagged for human review"
+                        if progress:
+                            progress(
+                                offset + processed, offset + len(papers),
+                                f"{paper['arxiv_id']}: {verdict}",
+                            )
                     except Exception:
                         stats["failed"] += 1
                         conn.execute(
@@ -543,6 +565,11 @@ def run_screen(
                             (paper["id"],),
                         )
                         conn.commit()
+                        if progress:
+                            progress(
+                                offset + processed, offset + len(papers),
+                                f"{paper['arxiv_id']}: failed to classify",
+                            )
                     if should_stop and should_stop():
                         break
 
@@ -567,3 +594,90 @@ def run_screen(
         ).fetchone()["n"]
         stats["review"] = still_review + (stats["review"] - len(escalated))
     return stats
+
+
+def affiliate_one(
+    conn: sqlite3.Connection,
+    cfg: AppConfig,
+    paper_id: int,
+    prompt_version_id: int,
+    prompt_text: str,
+    client: LLMClient | None = None,
+    download_fn: DownloadFn | None = None,
+) -> dict[str, Any]:
+    """Run the affiliations stage on a single paper, regardless of its current status."""
+    row = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    if row is None:
+        raise KeyError(f"paper {paper_id} not found")
+    paper = dict(row)
+    client = client or build_client(
+        cfg.llm.base_url, cfg.llm.api_key_env, cfg.llm.timeout_sec, cfg.llm.max_retries
+    )
+    download = download_fn or pdf.ensure_pdf
+    try:
+        path = download(paper["arxiv_id"], paper["pdf_url"])
+    except pdf.PDFNotFoundError as exc:
+        _mark_withdrawn(conn, paper, cfg, f"withdrawn/unavailable: {exc}")
+        return {"status": "withdrawn", "error": str(exc), "detail": str(exc)}
+    except Exception as exc:
+        _mark_unresolved(conn, paper, cfg, f"download failed: {exc}")
+        return {"status": "unresolved", "error": str(exc), "detail": str(exc)}
+    try:
+        out = _extraction_task(client, cfg, prompt_text, paper, path)
+    except Exception as exc:
+        _mark_unresolved(conn, paper, cfg, f"extraction failed: {exc}")
+        return {"status": "unresolved", "error": str(exc), "detail": str(exc)}
+    detail = _apply_affiliation(conn, paper, cfg, prompt_version_id, out)
+    new = conn.execute(
+        "SELECT status, china_flag FROM papers WHERE id = ?", (paper_id,)
+    ).fetchone()
+    return {
+        "status": new["status"],
+        "china_flag": new["china_flag"],
+        "detail": detail,
+        "likely_mainland_china": out.get("likely") or "",
+        "method": out["method"],
+    }
+
+
+def screen_one(
+    conn: sqlite3.Connection,
+    cfg: AppConfig,
+    paper_id: int,
+    prompt_version_id: int,
+    prompt_text: str,
+    client: LLMClient | None = None,
+) -> dict[str, Any]:
+    """Run the screening stage on a single paper, regardless of its current status.
+
+    Mirrors the batch ``run_screen``: a low-confidence result is escalated to a
+    full-text screen before a final ``needs_review`` is settled on.
+    """
+    row = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    if row is None:
+        raise KeyError(f"paper {paper_id} not found")
+    paper = dict(row)
+    client = client or build_client(
+        cfg.llm.base_url, cfg.llm.api_key_env, cfg.llm.timeout_sec, cfg.llm.max_retries
+    )
+    try:
+        out = _screen_task(client, cfg, prompt_text, paper, fulltext=False)
+    except Exception as exc:
+        conn.execute(
+            "UPDATE papers SET status = 'screen_error' WHERE id = ?", (paper_id,)
+        )
+        conn.commit()
+        return {"status": "screen_error", "error": str(exc), "escalated": False}
+    status = _apply_screen(conn, paper, cfg, prompt_version_id, out)
+    escalated = False
+    if status == "needs_review":
+        try:
+            out2 = _screen_task(client, cfg, prompt_text, paper, fulltext=True)
+            status = _apply_screen(conn, paper, cfg, prompt_version_id, out2)
+            escalated = True
+        except Exception as exc:
+            # Leave the paper at needs_review for human review; the full-text
+            # escalation (which needs a cached/downloadable PDF) failed.
+            return {"status": status, "error": f"full-text escalation failed: {exc}",
+                    "escalated": False}
+    return {"status": status, "escalated": escalated}

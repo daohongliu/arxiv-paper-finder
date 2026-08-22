@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { Badge, Btn, Card, ErrorBanner, Field, Input, Select, Spinner, statusTone } from "../ui";
 
@@ -17,6 +17,11 @@ export default function PaperDetailPage() {
   const { id } = useParams();
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const backToPapers = () => {
+    const state = window.history.state as { idx?: number } | null;
+    if (state && typeof state.idx === "number" && state.idx > 0) navigate(-1);
+    else navigate("/papers");
+  };
   const { data: paper, isLoading, error } = useQuery({
     queryKey: ["paper", id],
     queryFn: () => api.paper(Number(id)),
@@ -33,7 +38,7 @@ export default function PaperDetailPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["papers"] });
       qc.invalidateQueries({ queryKey: ["stats"] });
-      navigate("/papers");
+      backToPapers();
     },
   });
 
@@ -52,6 +57,22 @@ export default function PaperDetailPage() {
     },
   });
 
+  const invalidatePaper = () => {
+    qc.invalidateQueries({ queryKey: ["paper", id] });
+    qc.invalidateQueries({ queryKey: ["papers"] });
+    qc.invalidateQueries({ queryKey: ["stats"] });
+  };
+
+  const affiliate = useMutation({
+    mutationFn: () => api.affiliate(Number(id)),
+    onSuccess: invalidatePaper,
+  });
+
+  const screen = useMutation({
+    mutationFn: () => api.screen(Number(id)),
+    onSuccess: invalidatePaper,
+  });
+
   if (isLoading) return <Spinner />;
   if (error || !paper) return <ErrorBanner error={error ?? new Error("not found")} />;
 
@@ -59,7 +80,7 @@ export default function PaperDetailPage() {
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <div className="text-sm text-zinc-500">
-          <Link to="/papers" className="hover:text-zinc-300">← Papers</Link>
+          <button type="button" onClick={backToPapers} className="hover:text-zinc-300">← Papers</button>
         </div>
         <Btn
           variant="danger"
@@ -75,11 +96,70 @@ export default function PaperDetailPage() {
       </div>
       {del.isError && <ErrorBanner error={del.error} />}
 
+      <Card title="Run stages on this paper">
+        <div className="flex flex-wrap items-center gap-3">
+          <Btn
+            variant="primary"
+            disabled={affiliate.isPending || screen.isPending}
+            onClick={() => affiliate.mutate()}
+          >
+            {affiliate.isPending ? "Affiliating…" : "Affiliate this paper"}
+          </Btn>
+          <Btn
+            variant="primary"
+            disabled={affiliate.isPending || screen.isPending}
+            onClick={() => screen.mutate()}
+          >
+            {screen.isPending ? "Screening…" : "Screen this paper"}
+          </Btn>
+          <span className="text-xs text-zinc-500">
+            Runs the LLM stage on this single paper (can take ~30s).
+          </span>
+        </div>
+        {affiliate.isSuccess && affiliate.data && (
+          <div className="mt-2 text-sm text-zinc-300">
+            Affiliation result:{" "}
+            <Badge tone={statusTone(affiliate.data.status)}>
+              {affiliate.data.status.replaceAll("_", " ")}
+            </Badge>
+            {affiliate.data.likely_mainland_china && (
+              <span className="text-zinc-500">
+                {" "}· verdict {affiliate.data.likely_mainland_china}
+              </span>
+            )}
+            {affiliate.data.detail && (
+              <span className="text-zinc-500"> — {affiliate.data.detail}</span>
+            )}
+          </div>
+        )}
+        {screen.isSuccess && screen.data && (
+          <div className="mt-2 text-sm text-zinc-300">
+            Screening result:{" "}
+            <Badge tone={statusTone(screen.data.status)}>
+              {screen.data.status.replaceAll("_", " ")}
+            </Badge>
+            {screen.data.escalated && (
+              <span className="text-zinc-500"> (full-text escalation)</span>
+            )}
+            {screen.data.error && (
+              <span className="text-zinc-500"> — {screen.data.error}</span>
+            )}
+          </div>
+        )}
+        {affiliate.isError && <div className="mt-2"><ErrorBanner error={affiliate.error} /></div>}
+        {screen.isError && <div className="mt-2"><ErrorBanner error={screen.error} /></div>}
+      </Card>
+
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-sm text-zinc-400">{paper.arxiv_id}v{paper.version}</span>
           <Badge tone={statusTone(paper.status)}>{paper.status.replaceAll("_", " ")}</Badge>
           {paper.category && <Badge tone="violet">{paper.category}{paper.subcategory ? ` / ${paper.subcategory}` : ""}</Badge>}
+          {paper.in_gt && (
+            <Badge tone="pink">
+              in ground truth{paper.gt_category ? ` (${paper.gt_category}${paper.gt_subcategory ? `/${paper.gt_subcategory}` : ""})` : ""}
+            </Badge>
+          )}
           {paper.china_flag === 1 && <Badge tone="green">mainland-CN affiliated</Badge>}
           <Badge tone={paper.pdf_cached ? "green" : "zinc"}>{paper.pdf_cached ? "PDF downloaded" : "PDF not cached"}</Badge>
           {paper.confidence != null && <span className="text-xs text-zinc-500">confidence {paper.confidence.toFixed(2)}</span>}

@@ -191,10 +191,12 @@ def fetch_papers(
                     client, cfg.arxiv_base_url, query, cfg.page_size, throttle,
                     max_results=cfg.max_slice_results,
                 )
+                kept = 0
                 for paper in entries:
                     pub = paper["submitted"][:10]
                     if not (start_date <= pub <= end_date):
                         continue
+                    kept += 1
                     aid = paper["arxiv_id"]
                     query_hits.setdefault(aid, set()).add(clause.name)
                     if aid not in results or paper["version"] > results[aid]["version"]:
@@ -202,11 +204,9 @@ def fetch_papers(
                 if progress:
                     note = ""
                     if len(entries) >= cfg.max_slice_results and total > len(entries):
-                        note = f" [truncated at {cfg.max_slice_results} of {total}]"
-                    msg = (
-                        f"{clause.name} {s_start.strftime('%Y-%m-%d')}→"
-                        f"{s_end.strftime('%Y-%m-%d')} done{note}"
-                    )
+                        note = f" (showing first {cfg.max_slice_results} of {total})"
+                    month = s_start.strftime("%b %Y")
+                    msg = f"Searched \"{clause.name}\" for {month}: found {kept} papers{note}"
                     progress(unit, total_units, msg)
                 if unit_done:
                     unit_done(unit)

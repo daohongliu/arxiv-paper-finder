@@ -31,6 +31,8 @@ export default function Eval() {
         <code className="rounded bg-zinc-800 px-1">Alignment</code>,{" "}
         <code className="rounded bg-zinc-800 px-1">Monitoring (interpretability)</code>). The report shows how many
         ground-truth papers the pipeline recovers, where the rest were lost in the funnel, and category agreement.
+        Importing also stores each paper's ground-truth membership, so the <strong>Papers</strong> tab can filter by
+        "ground truth × included".
       </p>
 
       <div className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">

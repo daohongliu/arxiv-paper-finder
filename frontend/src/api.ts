@@ -12,6 +12,8 @@ export interface PaperSummary {
   queries: string[];
   abs_url: string;
   pdf_cached: boolean;
+  in_gt: boolean;
+  gt_category: string | null;
 }
 
 export interface AffiliationAuthor {
@@ -30,6 +32,9 @@ export interface PaperDetail extends PaperSummary {
   pdf_url: string;
   comments: string | null;
   rationale: string | null;
+  in_gt: boolean;
+  gt_category: string | null;
+  gt_subcategory: string | null;
   affiliations: {
     model: string;
     method: string;
@@ -89,6 +94,16 @@ export interface Stats {
   included_monthly: { month: string; n: number }[];
   llm: { calls: number; input_tokens: number; output_tokens: number };
   active_jobs: number;
+  ground_truth: {
+    total: number;
+    in_db: number;
+    matrix: {
+      in_gt_included: number;
+      in_gt_not_included: number;
+      not_in_gt_included: number;
+      not_in_gt_not_included: number;
+    };
+  };
 }
 
 export interface SearchClause {
@@ -148,6 +163,7 @@ export interface EvalReport {
   category_matrix: Record<string, Record<string, number>>;
   rows_parsed?: number;
   saved_to?: string;
+  gt_rows_imported?: number;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -188,6 +204,23 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ids, ...body }),
     }),
+  affiliate: (id: number) =>
+    request<{
+      ok: boolean;
+      status: string;
+      china_flag?: number;
+      detail?: string;
+      likely_mainland_china?: string;
+      method?: string;
+      error?: string;
+    }>(`/api/papers/${id}/affiliate`, { method: "POST" }),
+  screen: (id: number) =>
+    request<{
+      ok: boolean;
+      status: string;
+      escalated?: boolean;
+      error?: string;
+    }>(`/api/papers/${id}/screen`, { method: "POST" }),
   deletePaper: (id: number) =>
     request<{ ok: boolean; pdf_removed: boolean }>(`/api/papers/${id}`, { method: "DELETE" }),
   bulkDelete: (ids: number[]) =>

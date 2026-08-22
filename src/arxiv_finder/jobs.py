@@ -98,8 +98,9 @@ def append_log(conn: sqlite3.Connection, job_id: int, line: str) -> None:
     row = conn.execute("SELECT log_tail FROM jobs WHERE id = ?", (job_id,)).fetchone()
     if row is None:
         return
+    timestamp = db.now_iso().replace("T", " ").replace("+00:00", "")
     lines = (row["log_tail"] or "").splitlines()
-    lines.append(f"{db.now_iso()} {line}")
+    lines.append(f"{timestamp}  {line}")
     conn.execute(
         "UPDATE jobs SET log_tail = ? WHERE id = ?",
         ("\n".join(lines[-_LOG_LIMIT:]), job_id),
@@ -107,8 +108,57 @@ def append_log(conn: sqlite3.Connection, job_id: int, line: str) -> None:
     conn.commit()
 
 
+def _summarize_result(result: dict) -> list[str]:
+    """Render a job's result dict as friendly, human-readable summary lines."""
+    lines: list[str] = []
+    fetch = result.get("fetch")
+    if isinstance(fetch, dict):
+        lines.append(
+            f"Search: {fetch.get('fetched', 0)} papers matched "
+            f"({fetch.get('new', 0)} new, {fetch.get('name_filtered', 0)} name-filtered)."
+        )
+    elif "fetched" in result:
+        lines.append(
+            f"Search: {result.get('fetched', 0)} papers matched "
+            f"({result.get('new', 0)} new, {result.get('name_filtered', 0)} name-filtered)."
+        )
+    download = result.get("download")
+    if isinstance(download, dict):
+        lines.append(
+            f"Download: {download.get('downloaded', 0)} PDFs downloaded, "
+            f"{download.get('failed', 0)} failed."
+        )
+    affiliations = result.get("affiliations")
+    if isinstance(affiliations, dict):
+        lines.append(
+            f"Affiliations: {affiliations.get('ok', 0)} resolved, "
+            f"{affiliations.get('failed', 0)} failed."
+        )
+    elif "ok" in result:
+        lines.append(
+            f"Affiliations: {result.get('ok', 0)} resolved, "
+            f"{result.get('failed', 0)} failed."
+        )
+    screen = result.get("screen")
+    if isinstance(screen, dict):
+        lines.append(
+            f"Screening: {screen.get('included', 0)} included, "
+            f"{screen.get('excluded', 0)} excluded, {screen.get('review', 0)} for review."
+        )
+    elif "included" in result:
+        lines.append(
+            f"Screening: {result.get('included', 0)} included, "
+            f"{result.get('excluded', 0)} excluded, {result.get('review', 0)} for review."
+        )
+    if not lines:
+        lines.append(json.dumps(result))
+    return lines
+
+
 def finish_job(conn: sqlite3.Connection, job_id: int, result: dict) -> None:
-    append_log(conn, job_id, f"done: {json.dumps(result)}")
+    append_log(conn, job_id, "Job completed.")
+    for line in _summarize_result(result):
+        append_log(conn, job_id, f"  {line}")
     conn.execute(
         "UPDATE jobs SET status = 'done', finished_at = ? WHERE id = ?",
         (db.now_iso(), job_id),
@@ -117,7 +167,7 @@ def finish_job(conn: sqlite3.Connection, job_id: int, result: dict) -> None:
 
 
 def fail_job(conn: sqlite3.Connection, job_id: int, error: str) -> None:
-    append_log(conn, job_id, f"failed: {error}")
+    append_log(conn, job_id, f"Job failed: {error}")
     conn.execute(
         "UPDATE jobs SET status = 'failed', finished_at = ?, error = ? WHERE id = ?",
         (db.now_iso(), error[:2000], job_id),

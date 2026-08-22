@@ -104,6 +104,6 @@ def test_fetch_resumes_after_rate_limit_failure(tmp_path, monkeypatch):
     # units 1-2 NOT re-fetched: only units 3..n ran on resume (50 units)
     assert state["calls"] == 3 + (n_clauses - 2)
     log = conn.execute("SELECT log_tail FROM jobs WHERE id=?", (job_id,)).fetchone()["log_tail"]
-    assert f"resume: fetch continues from unit 2/{n_clauses}" in log
+    assert f"Resuming search from step 2 of {n_clauses}" in log
     # Run 1 failed before storing papers; Run 2 successfully stored the 50 resumed papers
     assert conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0] == (n_clauses - 2)

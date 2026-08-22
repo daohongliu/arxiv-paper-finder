@@ -17,6 +17,7 @@ export function Badge({ children, tone = "zinc" }: { children: ReactNode; tone?:
     blue: "bg-sky-900/60 text-sky-300",
     amber: "bg-amber-900/60 text-amber-300",
     violet: "bg-violet-900/60 text-violet-300",
+    pink: "bg-pink-900/60 text-pink-300",
   };
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${tones[tone] ?? tones.zinc}`}>

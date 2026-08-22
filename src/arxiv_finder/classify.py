@@ -48,8 +48,13 @@ def parse_screen_result(raw: dict[str, Any]) -> ScreenResult:
 def decide(
     result: ScreenResult, escalate_below: float, review_below: float, escalated: bool
 ) -> tuple[str, str]:
-    if result.confidence < (review_below if escalated else escalate_below):
-        return ("needs_review", "escalate" if not escalated else "human_review")
+    if not escalated and result.confidence < escalate_below:
+        # Full-text escalation is disabled (cost): papers the abstract-only
+        # screen isn't confident enough to keep are auto-excluded rather than
+        # re-screened on full text.
+        return ("screened_excluded", "excluded")
+    if escalated and result.confidence < review_below:
+        return ("needs_review", "human_review")
     if result.is_frontier_ai_safety:
         return ("screened_included", "included")
     return ("screened_excluded", "excluded")
